@@ -116,6 +116,8 @@ enum stat darray_set_cmp_f(struct darray *arr, int (*cmp_f)(const void *, const 
 darray_set_allocator(struct darray *arr, struct allocator allocator)
 
 set the allocator of the array with 'struct allocator' in 'common.h'
+this function also reallocates the memory with the new allocator and free the old ones if
+the 'buffer' is not new
 returns 'ERR_NULL_POINTER' if 'arr' points to nothing
 returns 'ERR_NULL_FUNCTION_POINTER' if 'mem_alloc_f' points to nothing
 returns 'ERR_ALLOC' if memory allocation failed
@@ -124,6 +126,33 @@ returns 'OK' if everything runs smoothly
 time complexity: O(arr->capacity)
 space complexity: O(arr->capacity)
 */
+static enum stat _mv_data(struct darray *arr, struct allocator allocator)
+{
+    if (!allocator.mem_alloc_f || !allocator.mem_free_f)
+        return ERR_NULL_FUNCTION_POINTER;
+
+    any_t *buffer_cpy = (any_t *)allocator.mem_alloc_f(sizeof(any_t) * arr->capacity);
+    if (!buffer_cpy)
+        return ERR_ALLOC;
+
+    memcpy(buffer_cpy, arr->buffer, sizeof(any_t) * arr->capacity);
+
+    arr->allocator.mem_free_f(arr->buffer);
+
+    arr->buffer = allocator.mem_alloc_f(sizeof(any_t) * arr->capacity);
+    if (!arr->buffer)
+    {
+        allocator.mem_free_f(arr->buffer);
+        return ERR_ALLOC;
+    }
+
+    memcpy(arr->buffer, buffer_cpy, sizeof(any_t) * arr->capacity);
+
+    allocator.mem_free_f(buffer_cpy);
+
+    return OK;
+}
+
 enum stat darray_set_allocator(struct darray *arr, struct allocator allocator)
 {
     if (!arr)
@@ -131,27 +160,10 @@ enum stat darray_set_allocator(struct darray *arr, struct allocator allocator)
 
     if (arr->buffer != NULL)
     {
-        if (!allocator.mem_alloc_f || !allocator.mem_free_f)
-            return ERR_NULL_FUNCTION_POINTER;
+        enum stat stat = _mv_data(arr, allocator);
 
-        any_t *buffer_cpy = (any_t *)allocator.mem_alloc_f(sizeof(any_t) * arr->capacity);
-        if (!buffer_cpy)
-            return ERR_ALLOC;
-
-        memcpy(buffer_cpy, arr->buffer, sizeof(any_t) * arr->capacity);
-
-        arr->allocator.mem_free_f(arr->buffer);
-
-        arr->buffer = allocator.mem_alloc_f(sizeof(any_t) * arr->capacity);
-        if (!arr->buffer)
-        {
-            allocator.mem_free_f(arr->buffer);
-            return ERR_ALLOC;
-        }
-
-        memcpy(arr->buffer, buffer_cpy, sizeof(any_t) * arr->capacity);
-
-        allocator.mem_free_f(buffer_cpy);
+        if (stat != OK)
+            return stat;
     }
 
     arr->allocator = allocator;
@@ -165,6 +177,7 @@ darray_resize(struct darray *arr, size_t new_capacity)
 resize the 'buffer' in the dynamic array
 reallocates the memory to the new capacity and copies the original data into the new buffer
 returns 'ERR_NULL_POINTER' if 'arr' points to nothing
+returns 'ERR_NULL_FUNCTION_POINTER' if 'mem_realloc_f' points to nothing
 returns 'ERR_ALLOC' when allocation of memory failed
 returns 'OK' if everything runs smoothly
 
@@ -175,6 +188,8 @@ enum stat darray_resize(struct darray *arr, size_t new_capacity)
 {
     if (!arr)
         return ERR_NULL_POINTER;
+    if (!arr->allocator.mem_realloc_f)
+        return ERR_NULL_FUNCTION_POINTER;
 
     any_t *new_buffer = arr->allocator.mem_realloc_f(arr->buffer, new_capacity * sizeof(any_t));
     if (!new_buffer)
@@ -199,6 +214,7 @@ then memory will be allocated with 'mem_alloc_f' of the capacity provided in the
 this functions doesn't automatically resize the dynamic array
 returns 'ERR_NULL_POINTER' if 'arr' points to nothing
 returns 'ERR_INDEX_LARGER_THAN_CAPACITY' if 'index' is out of scope
+returns 'ERR_NULL_FUNCTION_POINTER' if 'mem_alloc_f' points to nothing
 returns 'ERR_ALLOC' when allocation of memory failed
 returns 'OK' if everything runs smoothly
 
@@ -219,6 +235,9 @@ enum stat darray_insert(struct darray *arr, size_t index, any_t data)
     */
     if (arr->buffer == NULL)
     {
+        if (!arr->allocator.mem_alloc_f)
+            return ERR_NULL_FUNCTION_POINTER;
+
         arr->buffer = arr->allocator.mem_alloc_f(sizeof(any_t) * arr->capacity);
         if (!arr->buffer)
             return ERR_ALLOC;
