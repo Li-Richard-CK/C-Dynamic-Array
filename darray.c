@@ -117,10 +117,12 @@ darray_set_allocator(struct darray *arr, struct allocator allocator)
 
 set the allocator of the array with 'struct allocator' in 'common.h'
 returns 'ERR_NULL_POINTER' if 'arr' points to nothing
+returns 'ERR_NULL_FUNCTION_POINTER' if 'mem_alloc_f' points to nothing
+returns 'ERR_ALLOC' if memory allocation failed
 returns 'OK' if everything runs smoothly
 
-time complexity: O(1)
-space complexity: O(1)
+time complexity: O(arr->capacity)
+space complexity: O(arr->capacity)
 */
 enum stat darray_set_allocator(struct darray *arr, struct allocator allocator)
 {
@@ -129,11 +131,61 @@ enum stat darray_set_allocator(struct darray *arr, struct allocator allocator)
 
     if (arr->buffer != NULL)
     {
-        // @TODO create a copy of the array and free the original one and allocate the new memory
-        // using the new allocator
+        if (!allocator.mem_alloc_f || !allocator.mem_free_f)
+            return ERR_NULL_FUNCTION_POINTER;
+
+        any_t *buffer_cpy = (any_t *)allocator.mem_alloc_f(sizeof(any_t) * arr->capacity);
+        if (!buffer_cpy)
+            return ERR_ALLOC;
+
+        memcpy(buffer_cpy, arr->buffer, sizeof(any_t) * arr->capacity);
+
+        arr->allocator.mem_free_f(arr->buffer);
+
+        arr->buffer = allocator.mem_alloc_f(sizeof(any_t) * arr->capacity);
+        if (!arr->buffer)
+        {
+            allocator.mem_free_f(arr->buffer);
+            return ERR_ALLOC;
+        }
+
+        memcpy(arr->buffer, buffer_cpy, sizeof(any_t) * arr->capacity);
+
+        allocator.mem_free_f(buffer_cpy);
     }
 
     arr->allocator = allocator;
+
+    return OK;
+}
+
+/*
+darray_resize(struct darray *arr, size_t new_capacity)
+
+resize the 'buffer' in the dynamic array
+reallocates the memory to the new capacity and copies the original data into the new buffer
+returns 'ERR_NULL_POINTER' if 'arr' points to nothing
+returns 'ERR_ALLOC' when allocation of memory failed
+returns 'OK' if everything runs smoothly
+
+time complexity: O(n + k)
+space complexity: O(n)
+*/
+enum stat darray_resize(struct darray *arr, size_t new_capacity)
+{
+    if (!arr)
+        return ERR_NULL_POINTER;
+
+    any_t *new_buffer = arr->allocator.mem_realloc_f(arr->buffer, new_capacity * sizeof(any_t));
+    if (!new_buffer)
+        return ERR_ALLOC;
+
+    /* copy the original data into new buffer */
+    memcpy(new_buffer, arr->buffer,
+           ((arr->capacity < new_capacity) ? arr->capacity : new_capacity) * sizeof(any_t));
+
+    arr->buffer = new_buffer;
+    arr->capacity = new_capacity;
 
     return OK;
 }
@@ -144,13 +196,14 @@ darray_insert(struct darray *arr, size_t index, any_t data)
 insert data to 'index' of the buffer in the dynamic array
 if the dynamic array is not used before it means that memory is not allocated for it yet
 then memory will be allocated with 'mem_alloc_f' of the capacity provided in the darray struct
+this functions doesn't automatically resize the dynamic array
 returns 'ERR_NULL_POINTER' if 'arr' points to nothing
 returns 'ERR_INDEX_LARGER_THAN_CAPACITY' if 'index' is out of scope
 returns 'ERR_ALLOC' when allocation of memory failed
 returns 'OK' if everything runs smoothly
 
 time complexity: O(n)
-space complexity: O(arr->capacity)
+space complexity: O(1)
 */
 enum stat darray_insert(struct darray *arr, size_t index, any_t data)
 {
@@ -173,30 +226,79 @@ enum stat darray_insert(struct darray *arr, size_t index, any_t data)
 
     memcpy(&(arr->buffer[index]), &data, sizeof(any_t));
 
+    if (index >= arr->len)
+        arr->len = index + 1;
+
     return OK;
 }
 
 /*
-darray_at(struct darray *arr, size_t index, any_t *dst)
+darray_append(struct darray *arr, any_t data)
+
+appends 'data' to the end of buffer of 'arr'
+this function automatically resizes the buffer if no space is left
+returns whatever 'darray_resize' or 'darray_insert' returns
+
+time complexity: O(n)
+space complexity: O(1)
+*/
+enum stat darray_append(struct darray *arr, any_t data)
+{
+    if (!arr)
+        return ERR_NULL_POINTER;
+
+    if (arr->len >= arr->capacity)
+    {
+        enum stat stat = darray_resize(arr, arr->capacity + DEFAULT_EXPANSION_FACTOR);
+
+        /* return if any error codes are returned from 'darray_resize' */
+        if (stat != OK)
+            return stat;
+    }
+
+    return darray_insert(arr, arr->len, data);
+}
+
+/*
+darray_at_dst(struct darray *arr, size_t index, any_t *dst)
 
 retreives the data of 'index' from the 'buffer' and copy it into 'dst'
 returns 'ERR_NULL_POINTER' if 'arr' points to nothing
 returns 'ERR_INDEX_LARGER_THAN_CAPACITY' if 'index' is out of scope
 returns 'OK' if everything runs smoothly
 
-time complexity: O(n)
+time complexity: O(1)
 space complexity: O(1)
 */
-enum stat darray_at(struct darray *arr, size_t index, any_t *dst)
+enum stat darray_at_dst(struct darray *arr, size_t index, any_t *dst)
 {
     if (!arr)
         return ERR_NULL_POINTER;
     if (index >= arr->capacity)
         return ERR_INDEX_LARGER_THAN_CAPACITY;
 
-    memcpy(dst, &(arr->buffer[index]), sizeof(any_t));
+    *dst = (arr->buffer[index]);
 
     return OK;
+}
+
+/*
+darray_at_ret(struct darray *arr, size_t index)
+
+calls 'darray_at_dst' to get the data of 'index'
+returns 'NULL' if anything is returns except 'OK' from 'darray_at_dst'
+returns the data if everything runs smoothly
+
+time complexity: O(1)
+space complexity: O(1)
+*/
+any_t darray_at_ret(struct darray *arr, size_t index)
+{
+    any_t ret;
+    if (darray_at_dst(arr, index, &ret) != OK)
+        return NULL;
+
+    return ret;
 }
 
 /*
